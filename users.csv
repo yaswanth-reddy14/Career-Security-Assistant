@@ -1,0 +1,2 @@
+username,username_lower,password_hash,role,email,created_at,is_active
+admin,admin,4f90e8ff3f77b41d45115fa2057e4870$712c55900280ef34f90a5127c811698c8539938cd16c888168ccf5d396fed2ba,Admin,,2026-02-15T11:32:28,True

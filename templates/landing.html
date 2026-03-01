@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero">
+    <p class="eyebrow">Secure Workforce Layoff Risk Prediction System</p>
+    <h1>Predict company and employee layoff risk early.</h1>
+    <p class="hero-text">
+        This project helps HR teams and employees estimate layoff risk using trained ML models,
+        explain key risk causes, and identify upskilling directions.
+    </p>
+    <div class="cta-row">
+        <a class="btn btn-primary" href="{{ url_for('signin') }}">Sign In</a>
+        <a class="btn btn-secondary" href="{{ url_for('signup') }}">Sign Up</a>
+    </div>
+</section>
+
+<section class="grid-3">
+    <article class="card">
+        <h3>Company Predictor</h3>
+        <p>Analyze organization-level risk from industry, funding, stage, country, and workforce impact.</p>
+    </article>
+    <article class="card">
+        <h3>Employee Predictor</h3>
+        <p>Estimate individual-level risk from profile, performance, experience, and skill pattern.</p>
+    </article>
+    <article class="card">
+        <h3>Actionable Insights</h3>
+        <p>See risk labels, contributing factors, and recommended skills for role-aligned growth.</p>
+    </article>
+</section>
+{% endblock %}

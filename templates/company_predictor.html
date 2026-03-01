@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+    <h2>Company-Level Predictor</h2>
+    <p class="muted">Accessible to HR/Admin users.</p>
+
+    <form method="post" class="form-grid">
+        <label>
+            Company Name
+            <input type="text" name="company_name" value="{{ form_values.company_name }}" required>
+        </label>
+
+        <label>
+            Industry
+            <select name="industry" required>
+                {% for item in industry_options %}
+                    <option value="{{ item }}" {% if item == form_values.industry %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label>
+            Funds Raised (USD millions)
+            <input type="number" name="funds" step="0.1" min="0" value="{{ form_values.funds }}" required>
+        </label>
+
+        <label>
+            Company Stage
+            <select name="stage" required>
+                {% for item in stage_options %}
+                    <option value="{{ item }}" {% if item == form_values.stage %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label>
+            Country
+            <select name="country" required>
+                {% for item in country_options %}
+                    <option value="{{ item }}" {% if item == form_values.country %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label>
+            Workforce Impacted %
+            <input type="number" name="workforce_impacted" step="0.1" min="0" max="100" value="{{ form_values.workforce_impacted }}" required>
+        </label>
+
+        <label>
+            Additional HR alert emails (comma-separated, optional)
+            <input type="text" name="additional_hr_emails" value="{{ form_values.additional_hr_emails }}">
+        </label>
+
+        <button type="submit" name="action" value="predict" class="btn btn-primary">Predict Company Risk</button>
+        <button type="submit" name="action" value="predict_and_alert" class="btn btn-secondary">Predict + Send Alert</button>
+    </form>
+
+    {% if suggested %}
+        <p class="muted">Industry suggestion from dataset match ({{ matched_company }}): <strong>{{ suggested }}</strong></p>
+    {% endif %}
+</section>
+
+{% if result %}
+<section class="panel">
+    <h3>Result</h3>
+    <p><strong>Company:</strong> {{ result.company_name }}</p>
+    <p><strong>Risk Score:</strong> {{ result.risk_score }}</p>
+    <p><strong>Risk Level:</strong> {{ result.risk_level }}</p>
+    <p class="muted">Generated at {{ result.timestamp }}</p>
+
+    <h4>Cause Analysis</h4>
+    <table>
+        <thead>
+            <tr>
+                <th>Cause</th>
+                <th>Status</th>
+                <th>Details</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in result.causes %}
+                <tr>
+                    <td>{{ item.cause }}</td>
+                    <td>
+                        {% if item.triggered %}
+                            <span class="pill pill-red">Contributing</span>
+                        {% else %}
+                            <span class="pill pill-gray">Not Contributing</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ item.details }}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel narrow">
+    <h2>Sign In</h2>
+    <form method="post" class="form-grid">
+        <label>
+            Role
+            <select name="role" required>
+                <option value="Admin">Admin</option>
+                <option value="HR">HR</option>
+                <option value="Employee">Employee</option>
+            </select>
+        </label>
+
+        <label>
+            Username
+            <input type="text" name="username" required>
+        </label>
+
+        <label>
+            Password
+            <input type="password" name="password" required>
+        </label>
+
+        <button type="submit" class="btn btn-primary">Sign In</button>
+    </form>
+    <p class="muted">New user? <a href="{{ url_for('signup') }}">Create an account</a></p>
+</section>
+{% endblock %}

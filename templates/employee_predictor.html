@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+    <h2>Employee-Level Predictor</h2>
+    <p class="muted">Accessible to Employee/HR/Admin users.</p>
+
+    <form method="post" class="form-grid">
+        <label>
+            Education
+            <select name="education" required>
+                {% for item in edu_options %}
+                    <option value="{{ item }}" {% if item == form_values.education %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label>
+            Joining Year
+            <input type="number" name="joining_year" min="2000" max="2035" value="{{ form_values.joining_year }}" required>
+        </label>
+
+        <label>
+            City
+            <select name="city" required>
+                {% for item in city_options %}
+                    <option value="{{ item }}" {% if item == form_values.city %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label>
+            Payment Tier
+            <input type="number" name="payment_tier" min="1" max="5" value="{{ form_values.payment_tier }}" required>
+        </label>
+
+        <label>
+            Age
+            <input type="number" name="age" min="18" max="70" value="{{ form_values.age }}" required>
+        </label>
+
+        <label>
+            Gender
+            <select name="gender" required>
+                {% for item in gender_options %}
+                    <option value="{{ item }}" {% if item == form_values.gender %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label>
+            Ever Benched
+            <select name="ever_benched" required>
+                {% for item in bench_options %}
+                    <option value="{{ item }}" {% if item == form_values.ever_benched %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label>
+            Experience in Current Domain
+            <input type="number" name="experience" min="0" max="30" value="{{ form_values.experience }}" required>
+        </label>
+
+        <label>
+            Skills (comma-separated)
+            <input type="text" name="skills" value="{{ form_values.skills }}" required>
+        </label>
+
+        <label>
+            Target Job Role
+            <select name="target_role" required>
+                {% for item in role_options %}
+                    <option value="{{ item }}" {% if item == form_values.target_role %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label>
+            Performance Score
+            <input type="number" name="performance_score" min="1" max="5" value="{{ form_values.performance_score }}" required>
+        </label>
+
+        <label>
+            Additional employee alert emails (comma-separated, optional)
+            <input type="text" name="additional_employee_emails" value="{{ form_values.additional_employee_emails }}">
+        </label>
+
+        <button type="submit" name="action" value="predict" class="btn btn-primary">Predict Employee Risk</button>
+        <button type="submit" name="action" value="predict_and_alert" class="btn btn-secondary">Predict + Send Alert</button>
+    </form>
+</section>
+
+{% if result %}
+<section class="panel">
+    <h3>Result</h3>
+    <p><strong>Risk Score:</strong> {{ result.risk_score }}</p>
+    <p><strong>Risk Level:</strong> {{ result.risk_level }}</p>
+    <p><strong>Recommended Role:</strong> {{ result.recommended_role }}</p>
+
+    {% if result.recommended_skills %}
+        <p><strong>Top skills to improve:</strong> {{ result.recommended_skills | join(', ') }}</p>
+    {% else %}
+        <p><strong>Skill guidance:</strong> Current profile already matches this role well.</p>
+    {% endif %}
+
+    <h4>Cause Analysis</h4>
+    <table>
+        <thead>
+            <tr>
+                <th>Cause</th>
+                <th>Status</th>
+                <th>Details</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in result.causes %}
+                <tr>
+                    <td>{{ item.cause }}</td>
+                    <td>
+                        {% if item.triggered %}
+                            <span class="pill pill-red">Contributing</span>
+                        {% else %}
+                            <span class="pill pill-gray">Not Contributing</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ item.details }}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+{% endblock %}

@@ -9,31 +9,60 @@
 <body>
     <header class="topbar">
         <div class="brand">
-            <a href="{{ url_for('landing') }}">Career Security Assistant</a>
+            <a href="{{ url_for('landing') }}">
+                <span class="brand-mark" aria-hidden="true">CSA</span>
+                <span class="brand-text">Career Security Assistant</span>
+            </a>
         </div>
-        <nav>
+        <nav class="topnav">
             {% if is_authenticated %}
-                <a href="{{ url_for('dashboard') }}">Dashboard</a>
-                <a href="{{ url_for('logout') }}">Logout</a>
+                <a class="nav-link {% if request.endpoint == 'dashboard' %}is-active{% endif %}" href="{{ url_for('dashboard') }}">Dashboard</a>
+                <a class="nav-link {% if request.endpoint in ['profile', 'profile_verify_email_otp'] %}is-active{% endif %}" href="{{ url_for('profile') }}">Profile</a>
+                <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
             {% else %}
-                <a href="{{ url_for('signin') }}">Sign In</a>
-                <a href="{{ url_for('signup') }}">Sign Up</a>
+                <a class="nav-link {% if request.endpoint == 'signin' %}is-active{% endif %}" href="{{ url_for('signin') }}">Sign In</a>
+                <a class="nav-link {% if request.endpoint in ['signup', 'signup_verify_otp'] %}is-active{% endif %}" href="{{ url_for('signup') }}">Sign Up</a>
             {% endif %}
         </nav>
     </header>
 
-    <main class="container">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                <section class="flash-wrap">
-                    {% for category, message in messages %}
-                        <div class="flash flash-{{ category }}">{{ message }}</div>
-                    {% endfor %}
-                </section>
-            {% endif %}
-        {% endwith %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <section class="toast-stack" aria-live="polite" aria-atomic="true">
+                {% for category, message in messages %}
+                    <article class="toast toast-{{ category }}" data-toast role="status">
+                        <div class="toast-content">
+                            <span class="toast-dot" aria-hidden="true"></span>
+                            <p>{{ message }}</p>
+                        </div>
+                        <button type="button" class="toast-close" data-dismiss-toast aria-label="Dismiss notification">x</button>
+                    </article>
+                {% endfor %}
+            </section>
+        {% endif %}
+    {% endwith %}
 
+    <main class="container" data-page>
         {% block content %}{% endblock %}
     </main>
+
+    <div class="modal-backdrop" id="confirm-backdrop" hidden></div>
+    <section class="modal" id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" hidden>
+        <div class="modal-card">
+            <h3 id="confirm-title">Confirm Action</h3>
+            <p id="confirm-message">Are you sure you want to continue?</p>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" data-modal-cancel>Cancel</button>
+                <button type="button" class="btn btn-primary" data-modal-confirm>Continue</button>
+            </div>
+        </div>
+    </section>
+
+    <div class="loader-overlay" aria-hidden="true">
+        <div class="loader-spinner"></div>
+        <p>Processing request...</p>
+    </div>
+
+    <script src="{{ url_for('static', filename='ui.js') }}" defer></script>
 </body>
 </html>

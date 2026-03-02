@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel" data-reveal>
+    <h2>Profile Settings</h2>
+    <p class="muted">Manage your account information and security settings.</p>
+</section>
+
+<section class="grid-2">
+    <article class="panel" data-reveal style="--reveal-delay: 70ms;">
+        <h3>Account Overview</h3>
+        <div class="profile-meta">
+            <div class="profile-row">
+                <span class="profile-key">Username</span>
+                <strong class="profile-value">{{ profile.username }}</strong>
+            </div>
+            <div class="profile-row">
+                <span class="profile-key">Role</span>
+                <strong class="profile-value">{{ profile.role }}</strong>
+            </div>
+            <div class="profile-row">
+                <span class="profile-key">Email</span>
+                <strong class="profile-value">{{ profile.email if profile.email else 'N/A' }}</strong>
+            </div>
+            <div class="profile-row">
+                <span class="profile-key">Company</span>
+                <strong class="profile-value">{{ profile.company_name if profile.company_name else 'N/A' }}</strong>
+            </div>
+            <div class="profile-row">
+                <span class="profile-key">Member Since</span>
+                <strong class="profile-value">{{ profile.created_at if profile.created_at else 'N/A' }}</strong>
+            </div>
+        </div>
+    </article>
+
+    <article class="panel" data-reveal style="--reveal-delay: 120ms;">
+        <h3>Contact Preferences</h3>
+        <form method="post" class="form-grid">
+            <input type="hidden" name="action" value="update_email">
+            <label>
+                Email Address
+                <input type="email" name="email" value="{{ profile.email }}" required placeholder="name@example.com">
+            </label>
+            <button type="submit" class="btn btn-primary">Save Email</button>
+        </form>
+        <p class="profile-help">This email is used for your alert notifications. OTP verification is required before applying changes.</p>
+    </article>
+</section>
+
+<section class="panel" data-reveal style="--reveal-delay: 170ms;">
+    <h3>Change Password</h3>
+    <form method="post" class="form-grid narrow">
+        <input type="hidden" name="action" value="update_password">
+
+        <label>
+            Current Password
+            <input type="password" name="current_password" required autocomplete="current-password">
+        </label>
+
+        <label>
+            New Password
+            <input type="password" name="new_password" required minlength="6" autocomplete="new-password">
+        </label>
+
+        <label>
+            Confirm New Password
+            <input type="password" name="confirm_password" required minlength="6" autocomplete="new-password">
+        </label>
+
+        <button type="submit" class="btn btn-primary">Update Password</button>
+    </form>
+</section>
+{% endblock %}

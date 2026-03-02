@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import difflib
 import os
+import secrets
+from datetime import datetime, timedelta
 from functools import lru_cache, wraps
 
 import joblib
@@ -10,13 +12,18 @@ import pandas as pd
 from dotenv import load_dotenv
 from flask import Flask, flash, redirect, render_template, request, session, url_for
 
-from alerts import trigger_alert
+from alerts import send_alert_email, trigger_alert
 from auth import (
     authenticate_user,
     create_user,
     ensure_default_admin,
     get_active_user_email,
+    get_active_user_profile,
+    is_valid_email,
     list_active_emails_by_role,
+    update_active_user_email,
+    update_active_user_password,
+    username_exists,
 )
 
 load_dotenv(override=True)
@@ -55,6 +62,113 @@ EXTRA_COMPANY_INDUSTRIES: list[str] = [
     "Travel",
     "Real Estate",
 ]
+
+SIGNUP_OTP_EXPIRY_MINUTES = max(1, int(os.getenv("SIGNUP_OTP_EXPIRY_MINUTES", "10")))
+SIGNUP_OTP_MAX_ATTEMPTS = max(1, int(os.getenv("SIGNUP_OTP_MAX_ATTEMPTS", "5")))
+SIGNUP_OTP_STORE: dict[str, dict[str, object]] = {}
+PROFILE_EMAIL_OTP_EXPIRY_MINUTES = max(1, int(os.getenv("PROFILE_EMAIL_OTP_EXPIRY_MINUTES", "10")))
+PROFILE_EMAIL_OTP_MAX_ATTEMPTS = max(1, int(os.getenv("PROFILE_EMAIL_OTP_MAX_ATTEMPTS", "5")))
+PROFILE_EMAIL_OTP_STORE: dict[str, dict[str, object]] = {}
+
+
+def _cleanup_signup_otp_store() -> None:
+    now = datetime.now()
+    expired_tokens = [
+        token
+        for token, data in SIGNUP_OTP_STORE.items()
+        if not isinstance(data.get("expires_at"), datetime) or now > data["expires_at"]
+    ]
+    for token in expired_tokens:
+        SIGNUP_OTP_STORE.pop(token, None)
+
+
+def _generate_signup_otp() -> str:
+    return f"{secrets.randbelow(1000000):06d}"
+
+
+def _send_signup_otp_email(recipient: str, otp: str) -> tuple[bool, str]:
+    subject = "Career Security Assistant - Signup OTP Verification"
+    body = (
+        "Use this OTP to complete your signup.\n\n"
+        f"OTP: {otp}\n"
+        f"Expires in: {SIGNUP_OTP_EXPIRY_MINUTES} minute(s)\n\n"
+        "If you did not request this, ignore this email."
+    )
+    return send_alert_email(subject=subject, body=body, recipient=recipient)
+
+
+def _start_signup_otp_session(
+    role: str,
+    username: str,
+    email: str,
+    company_name: str,
+    password: str,
+) -> tuple[bool, str, str | None]:
+    _cleanup_signup_otp_store()
+    token = secrets.token_urlsafe(24)
+    otp = _generate_signup_otp()
+    expires_at = datetime.now() + timedelta(minutes=SIGNUP_OTP_EXPIRY_MINUTES)
+
+    SIGNUP_OTP_STORE[token] = {
+        "role": role,
+        "username": username,
+        "email": email,
+        "company_name": company_name,
+        "password": password,
+        "otp": otp,
+        "expires_at": expires_at,
+        "attempts": 0,
+    }
+
+    ok, msg = _send_signup_otp_email(recipient=email, otp=otp)
+    if not ok:
+        SIGNUP_OTP_STORE.pop(token, None)
+        return False, f"Unable to send OTP email: {msg}", None
+    return True, "OTP sent to your email. Enter it to finish signup.", token
+
+
+def _cleanup_profile_email_otp_store() -> None:
+    now = datetime.now()
+    expired_tokens = [
+        token
+        for token, data in PROFILE_EMAIL_OTP_STORE.items()
+        if not isinstance(data.get("expires_at"), datetime) or now > data["expires_at"]
+    ]
+    for token in expired_tokens:
+        PROFILE_EMAIL_OTP_STORE.pop(token, None)
+
+
+def _send_profile_email_otp_email(recipient: str, otp: str) -> tuple[bool, str]:
+    subject = "Career Security Assistant - Email Change OTP Verification"
+    body = (
+        "Use this OTP to confirm your new profile email.\n\n"
+        f"OTP: {otp}\n"
+        f"Expires in: {PROFILE_EMAIL_OTP_EXPIRY_MINUTES} minute(s)\n\n"
+        "If you did not request this, ignore this email."
+    )
+    return send_alert_email(subject=subject, body=body, recipient=recipient)
+
+
+def _start_profile_email_otp_session(username: str, new_email: str) -> tuple[bool, str, str | None]:
+    _cleanup_profile_email_otp_store()
+    token = secrets.token_urlsafe(24)
+    otp = _generate_signup_otp()
+    expires_at = datetime.now() + timedelta(minutes=PROFILE_EMAIL_OTP_EXPIRY_MINUTES)
+
+    PROFILE_EMAIL_OTP_STORE[token] = {
+        "username": username,
+        "new_email": new_email,
+        "otp": otp,
+        "expires_at": expires_at,
+        "attempts": 0,
+    }
+
+    ok, msg = _send_profile_email_otp_email(recipient=new_email, otp=otp)
+    if not ok:
+        PROFILE_EMAIL_OTP_STORE.pop(token, None)
+        return False, f"Unable to send OTP email: {msg}", None
+
+    return True, "OTP sent to your new email. Verify to complete email update.", token
 
 
 def risk_label(score: float) -> str:
@@ -213,6 +327,28 @@ def recommend_skill_gaps(skills_text: str, role: str) -> list[str]:
 def _parse_email_list(raw: str) -> list[str]:
     emails = [item.strip() for item in str(raw).split(",") if item.strip()]
     return list(dict.fromkeys(emails))
+
+
+def _flash_alert_delivery_summary(alert_label: str, sent: int, total: int, failed: list[str]) -> None:
+    failed_count = len(failed)
+    if total <= 0:
+        flash(f"{alert_label} alert not sent because no recipients were provided.", "warning")
+        return
+
+    if sent == total:
+        flash(f"{alert_label} alert sent to {sent}/{total} recipient(s).", "success")
+    elif sent == 0:
+        flash(f"{alert_label} alert failed for all {total} recipient(s).", "error")
+    else:
+        flash(
+            f"{alert_label} alert partially sent: {sent}/{total} delivered, {failed_count} failed.",
+            "warning",
+        )
+
+    for item in failed[:3]:
+        flash(item, "warning")
+    if failed_count > 3:
+        flash(f"...and {failed_count - 3} more failed recipient(s).", "warning")
 
 
 def _report_filename(prefix: str, name: str) -> str:
@@ -389,20 +525,139 @@ def signup():
         role = str(request.form.get("role", "")).strip()
         username = str(request.form.get("username", "")).strip()
         email = str(request.form.get("email", "")).strip()
+        company_name = str(request.form.get("company_name", "")).strip()
         password = str(request.form.get("password", ""))
         confirm_password = str(request.form.get("confirm_password", ""))
 
+        if role not in {"HR", "Employee"}:
+            flash("Invalid role", "error")
+            return render_template("signup.html")
+        if len(username) < 3:
+            flash("Username must be at least 3 characters", "error")
+            return render_template("signup.html")
+        if username_exists(username):
+            flash("Username already exists", "error")
+            return render_template("signup.html")
+        if not email:
+            flash("Email is required", "error")
+            return render_template("signup.html")
+        if not is_valid_email(email):
+            flash("Please enter a valid email address", "error")
+            return render_template("signup.html")
+        if len(company_name) < 2:
+            flash("Company name is required", "error")
+            return render_template("signup.html")
+        if len(password) < 6:
+            flash("Password must be at least 6 characters", "error")
+            return render_template("signup.html")
         if password != confirm_password:
             flash("Passwords do not match.", "error")
             return render_template("signup.html")
 
-        ok, msg = create_user(username=username, password=password, role=role, email=email)
-        if ok:
-            flash("Account created. Please sign in.", "success")
-            return redirect(url_for("signin"))
+        ok, msg, token = _start_signup_otp_session(
+            role=role,
+            username=username,
+            email=email,
+            company_name=company_name,
+            password=password,
+        )
+        if ok and token is not None:
+            session["pending_signup_token"] = token
+            flash(msg, "success")
+            return redirect(url_for("signup_verify_otp"))
         flash(msg, "error")
 
     return render_template("signup.html")
+
+
+@app.route("/signup/verify-otp", methods=["GET", "POST"])
+def signup_verify_otp():
+    if _is_authenticated():
+        return redirect(url_for("dashboard"))
+
+    _cleanup_signup_otp_store()
+    token = str(session.get("pending_signup_token", "")).strip()
+    pending = SIGNUP_OTP_STORE.get(token)
+    if not token or pending is None:
+        session.pop("pending_signup_token", None)
+        flash("Signup session expired. Please start signup again.", "warning")
+        return redirect(url_for("signup"))
+
+    if request.method == "POST":
+        action = str(request.form.get("action", "verify")).strip()
+
+        if action == "resend":
+            otp = _generate_signup_otp()
+            pending["otp"] = otp
+            pending["attempts"] = 0
+            pending["expires_at"] = datetime.now() + timedelta(minutes=SIGNUP_OTP_EXPIRY_MINUTES)
+
+            ok, msg = _send_signup_otp_email(recipient=str(pending["email"]), otp=otp)
+            if ok:
+                flash("A new OTP has been sent to your email.", "success")
+            else:
+                flash(f"Unable to resend OTP email: {msg}", "error")
+            return redirect(url_for("signup_verify_otp"))
+
+        entered_otp = str(request.form.get("otp", "")).strip()
+        expires_at = pending.get("expires_at")
+
+        if not entered_otp.isdigit() or len(entered_otp) != 6:
+            flash("Enter a valid 6-digit OTP.", "error")
+            return redirect(url_for("signup_verify_otp"))
+        if not isinstance(expires_at, datetime) or datetime.now() > expires_at:
+            flash("OTP expired. Please click Resend OTP.", "warning")
+            return redirect(url_for("signup_verify_otp"))
+
+        attempts = int(pending.get("attempts", 0)) + 1
+        pending["attempts"] = attempts
+        if attempts > SIGNUP_OTP_MAX_ATTEMPTS:
+            SIGNUP_OTP_STORE.pop(token, None)
+            session.pop("pending_signup_token", None)
+            flash("Too many incorrect OTP attempts. Please sign up again.", "error")
+            return redirect(url_for("signup"))
+
+        if entered_otp != str(pending.get("otp", "")):
+            remaining = max(0, SIGNUP_OTP_MAX_ATTEMPTS - attempts)
+            flash(f"Invalid OTP. {remaining} attempt(s) left.", "error")
+            return redirect(url_for("signup_verify_otp"))
+
+        username = str(pending.get("username", "")).strip()
+        if username_exists(username):
+            SIGNUP_OTP_STORE.pop(token, None)
+            session.pop("pending_signup_token", None)
+            flash("Username already exists. Please sign up with a different username.", "error")
+            return redirect(url_for("signup"))
+
+        ok, msg = create_user(
+            username=username,
+            password=str(pending.get("password", "")),
+            role=str(pending.get("role", "")),
+            email=str(pending.get("email", "")),
+            company_name=str(pending.get("company_name", "")),
+        )
+
+        SIGNUP_OTP_STORE.pop(token, None)
+        session.pop("pending_signup_token", None)
+
+        if ok:
+            flash("Account created successfully. Please sign in.", "success")
+            return redirect(url_for("signin"))
+
+        flash(msg, "error")
+        return redirect(url_for("signup"))
+
+    expires_at = pending.get("expires_at")
+    seconds_left = 0
+    if isinstance(expires_at, datetime):
+        seconds_left = max(0, int((expires_at - datetime.now()).total_seconds()))
+    minutes_left = max(1, (seconds_left + 59) // 60)
+
+    return render_template(
+        "verify_signup_otp.html",
+        email=str(pending.get("email", "")),
+        minutes_left=minutes_left,
+    )
 
 
 @app.route("/logout")
@@ -416,6 +671,154 @@ def logout():
 @login_required
 def dashboard():
     return render_template("dashboard.html")
+
+
+@app.route("/profile", methods=["GET", "POST"])
+@login_required
+def profile():
+    username = str(session.get("username", "")).strip()
+    if not username:
+        flash("Session is missing user details. Please sign in again.", "error")
+        return redirect(url_for("signin"))
+
+    if request.method == "POST":
+        action = str(request.form.get("action", "")).strip()
+
+        if action == "update_email":
+            new_email = str(request.form.get("email", "")).strip()
+            if not new_email:
+                flash("Email is required", "error")
+            elif not is_valid_email(new_email):
+                flash("Please enter a valid email address", "error")
+            else:
+                profile_data = get_active_user_profile(username)
+                if profile_data is None:
+                    flash("Unable to load profile details.", "error")
+                else:
+                    current_email = str(profile_data.get("email", "")).strip().lower()
+                    if new_email.lower() == current_email:
+                        flash("New email is the same as current email.", "warning")
+                    else:
+                        ok, msg, token = _start_profile_email_otp_session(
+                            username=username,
+                            new_email=new_email,
+                        )
+                        if ok and token is not None:
+                            session["pending_profile_email_token"] = token
+                            flash(msg, "success")
+                            return redirect(url_for("profile_verify_email_otp"))
+                        flash(msg, "error")
+        elif action == "update_password":
+            current_password = str(request.form.get("current_password", ""))
+            new_password = str(request.form.get("new_password", ""))
+            confirm_password = str(request.form.get("confirm_password", ""))
+
+            if new_password != confirm_password:
+                flash("New password and confirm password do not match.", "error")
+            else:
+                ok, msg = update_active_user_password(
+                    username=username,
+                    current_password=current_password,
+                    new_password=new_password,
+                )
+                flash(msg, "success" if ok else "error")
+        else:
+            flash("Invalid profile action.", "error")
+
+        return redirect(url_for("profile"))
+
+    profile_data = get_active_user_profile(username)
+    if profile_data is None:
+        flash("Unable to load profile details.", "error")
+        return redirect(url_for("dashboard"))
+
+    return render_template("profile.html", profile=profile_data)
+
+
+@app.route("/profile/verify-email-otp", methods=["GET", "POST"])
+@login_required
+def profile_verify_email_otp():
+    _cleanup_profile_email_otp_store()
+
+    username = str(session.get("username", "")).strip()
+    token = str(session.get("pending_profile_email_token", "")).strip()
+    pending = PROFILE_EMAIL_OTP_STORE.get(token)
+
+    if not username:
+        session.pop("pending_profile_email_token", None)
+        flash("Session is missing user details. Please sign in again.", "error")
+        return redirect(url_for("signin"))
+
+    if not token or pending is None or str(pending.get("username", "")).strip() != username:
+        session.pop("pending_profile_email_token", None)
+        flash("Email verification session expired. Please try again from profile.", "warning")
+        return redirect(url_for("profile"))
+
+    if request.method == "POST":
+        action = str(request.form.get("action", "verify")).strip()
+
+        if action == "cancel":
+            PROFILE_EMAIL_OTP_STORE.pop(token, None)
+            session.pop("pending_profile_email_token", None)
+            flash("Email update verification canceled.", "warning")
+            return redirect(url_for("profile"))
+
+        if action == "resend":
+            otp = _generate_signup_otp()
+            pending["otp"] = otp
+            pending["attempts"] = 0
+            pending["expires_at"] = datetime.now() + timedelta(minutes=PROFILE_EMAIL_OTP_EXPIRY_MINUTES)
+
+            ok, msg = _send_profile_email_otp_email(recipient=str(pending.get("new_email", "")), otp=otp)
+            if ok:
+                flash("A new OTP has been sent to your new email.", "success")
+            else:
+                flash(f"Unable to resend OTP email: {msg}", "error")
+            return redirect(url_for("profile_verify_email_otp"))
+
+        entered_otp = str(request.form.get("otp", "")).strip()
+        expires_at = pending.get("expires_at")
+
+        if not entered_otp.isdigit() or len(entered_otp) != 6:
+            flash("Enter a valid 6-digit OTP.", "error")
+            return redirect(url_for("profile_verify_email_otp"))
+        if not isinstance(expires_at, datetime) or datetime.now() > expires_at:
+            flash("OTP expired. Please click Resend OTP.", "warning")
+            return redirect(url_for("profile_verify_email_otp"))
+
+        attempts = int(pending.get("attempts", 0)) + 1
+        pending["attempts"] = attempts
+        if attempts > PROFILE_EMAIL_OTP_MAX_ATTEMPTS:
+            PROFILE_EMAIL_OTP_STORE.pop(token, None)
+            session.pop("pending_profile_email_token", None)
+            flash("Too many incorrect OTP attempts. Please retry email update from profile.", "error")
+            return redirect(url_for("profile"))
+
+        if entered_otp != str(pending.get("otp", "")):
+            remaining = max(0, PROFILE_EMAIL_OTP_MAX_ATTEMPTS - attempts)
+            flash(f"Invalid OTP. {remaining} attempt(s) left.", "error")
+            return redirect(url_for("profile_verify_email_otp"))
+
+        ok, msg = update_active_user_email(
+            username=username,
+            email=str(pending.get("new_email", "")).strip(),
+        )
+        PROFILE_EMAIL_OTP_STORE.pop(token, None)
+        session.pop("pending_profile_email_token", None)
+        flash(msg, "success" if ok else "error")
+        return redirect(url_for("profile"))
+
+    expires_at = pending.get("expires_at")
+    seconds_left = 0
+    if isinstance(expires_at, datetime):
+        seconds_left = max(0, int((expires_at - datetime.now()).total_seconds()))
+    minutes_left = max(1, (seconds_left + 59) // 60)
+
+    return render_template(
+        "verify_profile_email_otp.html",
+        email=str(pending.get("new_email", "")),
+        minutes_left=minutes_left,
+    )
 
 
 @app.route("/predict/company", methods=["GET", "POST"])
@@ -551,10 +954,12 @@ def company_predictor():
                             else:
                                 failed.append(f"{recipient}: {msg}")
 
-                        if sent:
-                            flash(f"Company alert sent to {sent}/{len(recipients)} recipient(s).", "success")
-                        for item in failed:
-                            flash(item, "warning")
+                        _flash_alert_delivery_summary(
+                            alert_label="Company",
+                            sent=sent,
+                            total=len(recipients),
+                            failed=failed,
+                        )
         except Exception as exc:
             flash(f"Unable to run company prediction: {exc}", "error")
 
@@ -736,10 +1141,12 @@ def employee_predictor():
                             else:
                                 failed.append(f"{recipient}: {msg}")
 
-                        if sent:
-                            flash(f"Employee alert sent to {sent}/{len(recipients)} recipient(s).", "success")
-                        for item in failed:
-                            flash(item, "warning")
+                        _flash_alert_delivery_summary(
+                            alert_label="Employee",
+                            sent=sent,
+                            total=len(recipients),
+                            failed=failed,
+                        )
         except Exception as exc:
             flash(f"Unable to run employee prediction: {exc}", "error")
 

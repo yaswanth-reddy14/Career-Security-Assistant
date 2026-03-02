@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="panel">
+<section class="panel" data-reveal>
     <h2>Company-Level Predictor</h2>
     <p class="muted">Accessible to HR/Admin users.</p>
 
@@ -54,7 +54,15 @@
         </label>
 
         <button type="submit" name="action" value="predict" class="btn btn-primary">Predict Company Risk</button>
-        <button type="submit" name="action" value="predict_and_alert" class="btn btn-secondary">Predict + Send Alert</button>
+        <button
+            type="submit"
+            name="action"
+            value="predict_and_alert"
+            class="btn btn-secondary"
+            data-confirm-submit="Send risk alert emails for this company prediction?"
+        >
+            Predict + Send Alert
+        </button>
     </form>
 
     {% if suggested %}
@@ -63,7 +71,7 @@
 </section>
 
 {% if result %}
-<section class="panel">
+<section class="panel" data-reveal style="--reveal-delay: 60ms;">
     <h3>Result</h3>
     <p><strong>Company:</strong> {{ result.company_name }}</p>
     <p><strong>Risk Score:</strong> {{ result.risk_score }}</p>
@@ -71,30 +79,33 @@
     <p class="muted">Generated at {{ result.timestamp }}</p>
 
     <h4>Cause Analysis</h4>
-    <table>
-        <thead>
-            <tr>
-                <th>Cause</th>
-                <th>Status</th>
-                <th>Details</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for item in result.causes %}
+    <div class="table-wrap">
+        <table>
+            <thead>
                 <tr>
-                    <td>{{ item.cause }}</td>
-                    <td>
-                        {% if item.triggered %}
-                            <span class="pill pill-red">Contributing</span>
-                        {% else %}
-                            <span class="pill pill-gray">Not Contributing</span>
-                        {% endif %}
-                    </td>
-                    <td>{{ item.details }}</td>
+                    <th>Cause</th>
+                    <th>Status</th>
+                    <th>Details</th>
                 </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+            </thead>
+            <tbody>
+                {% for item in result.causes %}
+                    <tr>
+                        <td>{{ item.cause }}</td>
+                        <td>
+                            {% if item.triggered %}
+                                <span class="pill pill-red">Contributing</span>
+                            {% else %}
+                                <span class="pill pill-gray">Not Contributing</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ item.details }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </section>
 {% endif %}
 {% endblock %}
+

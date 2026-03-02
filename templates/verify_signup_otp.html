@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel narrow auth-panel" data-reveal>
+    <h2>Verify Email OTP</h2>
+    <p class="muted">We sent a 6-digit OTP to <strong>{{ email }}</strong>.</p>
+    <p class="muted">This OTP expires in about {{ minutes_left }} minute(s).</p>
+
+    <form method="post" class="form-grid">
+        <input type="hidden" name="action" value="verify">
+        <label>
+            Enter OTP
+            <input
+                type="text"
+                name="otp"
+                required
+                minlength="6"
+                maxlength="6"
+                inputmode="numeric"
+                pattern="[0-9]{6}"
+                autocomplete="one-time-code"
+                placeholder="123456"
+            >
+        </label>
+        <button type="submit" class="btn btn-primary">Verify and Create Account</button>
+    </form>
+
+    <form method="post" class="form-grid">
+        <input type="hidden" name="action" value="resend">
+        <button type="submit" class="btn btn-secondary">Resend OTP</button>
+    </form>
+
+    <p class="muted">Wrong email? <a href="{{ url_for('signup') }}">Go back to signup</a></p>
+</section>
+{% endblock %}

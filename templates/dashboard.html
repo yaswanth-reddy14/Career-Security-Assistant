@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="panel">
+<section class="panel" data-reveal>
     <h2>Welcome, {{ current_username }}</h2>
     <p class="muted">Logged in as <strong>{{ current_role }}</strong></p>
 </section>
 
 <section class="grid-2">
     {% if current_role in ["Admin", "HR"] %}
-    <article class="card">
+    <article class="card" data-reveal style="--reveal-delay: 70ms;">
         <h3>Company-Level Predictor</h3>
         <p>Access company-level layoff risk estimation and cause analysis.</p>
         <a class="btn btn-primary" href="{{ url_for('company_predictor') }}">Open Company Predictor</a>
@@ -16,9 +16,9 @@
     {% endif %}
 
     {% if current_role in ["Admin", "HR", "Employee"] %}
-    <article class="card">
+    <article class="card" data-reveal style="--reveal-delay: 120ms;">
         <h3>Employee-Level Predictor</h3>
-        <p>Estimate employee-level risk, view causes, and see skill recommendations.</p>
+        <p>Estimate employee-level risk, view causes, and receive skill recommendations.</p>
         <a class="btn btn-primary" href="{{ url_for('employee_predictor') }}">Open Employee Predictor</a>
     </article>
     {% endif %}

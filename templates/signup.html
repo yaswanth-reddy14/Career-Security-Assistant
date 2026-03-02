@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="panel narrow">
-    <h2>Sign Up</h2>
+<section class="panel narrow auth-panel" data-reveal>
+    <h2>Create Account</h2>
     <form method="post" class="form-grid">
         <label>
             Register As
@@ -14,22 +14,27 @@
 
         <label>
             Username
-            <input type="text" name="username" required minlength="3">
+            <input type="text" name="username" required minlength="3" autocomplete="username">
         </label>
 
         <label>
-            Email (optional)
-            <input type="email" name="email">
+            Email
+            <input type="email" name="email" required autocomplete="email">
+        </label>
+
+        <label>
+            Company Name
+            <input type="text" name="company_name" required minlength="2" autocomplete="organization">
         </label>
 
         <label>
             Password
-            <input type="password" name="password" required minlength="6">
+            <input type="password" name="password" required minlength="6" autocomplete="new-password">
         </label>
 
         <label>
             Confirm Password
-            <input type="password" name="confirm_password" required minlength="6">
+            <input type="password" name="confirm_password" required minlength="6" autocomplete="new-password">
         </label>
 
         <button type="submit" class="btn btn-primary">Create Account</button>
@@ -37,3 +42,4 @@
     <p class="muted">Already registered? <a href="{{ url_for('signin') }}">Go to sign in</a></p>
 </section>
 {% endblock %}
+

@@ -73,9 +73,15 @@
 {% if result %}
 <section class="panel" data-reveal style="--reveal-delay: 60ms;">
     <h3>Result</h3>
+    {% set company_risk_class = "pill-red" %}
+    {% if result.risk_level == "Low" %}
+        {% set company_risk_class = "pill-green" %}
+    {% elif result.risk_level == "Medium" %}
+        {% set company_risk_class = "pill-amber" %}
+    {% endif %}
     <p><strong>Company:</strong> {{ result.company_name }}</p>
     <p><strong>Risk Score:</strong> {{ result.risk_score }}</p>
-    <p><strong>Risk Level:</strong> {{ result.risk_level }}</p>
+    <p><strong>Risk Level:</strong> <span class="pill {{ company_risk_class }}">{{ result.risk_level }}</span></p>
     <p class="muted">Generated at {{ result.timestamp }}</p>
 
     <h4>Cause Analysis</h4>

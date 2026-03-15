@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import difflib
+import json
 import os
 import secrets
 from datetime import datetime, timedelta
 from functools import lru_cache, wraps
+from pathlib import Path
 
 import joblib
 import numpy as np
@@ -30,6 +32,16 @@ load_dotenv(override=True)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-this-secret-key")
+
+RISK_CONFIG_PATH = Path("risk_thresholds.json")
+DEFAULT_RISK_BOUNDS = {"low_max": 0.40, "high_min": 0.70}
+BALANCED_THRESHOLD_HIGH_SHARE = 0.45
+BALANCED_LOW_QUANTILE = 0.20
+BALANCED_HIGH_QUANTILE = 0.80
+SCORED_FILE_MAP: dict[str, tuple[str, str]] = {
+    "company": ("company_scored.csv", "Company_Risk_Score"),
+    "employee": ("employee_scored.csv", "Employee_Risk_Score"),
+}
 
 
 ROLE_SKILL_MAP: dict[str, list[str]] = {
@@ -171,12 +183,82 @@ def _start_profile_email_otp_session(username: str, new_email: str) -> tuple[boo
     return True, "OTP sent to your new email. Verify to complete email update.", token
 
 
-def risk_label(score: float) -> str:
-    if score >= 0.70:
+@lru_cache(maxsize=1)
+def load_risk_config() -> dict[str, object]:
+    if not RISK_CONFIG_PATH.exists():
+        return {}
+    try:
+        raw = json.loads(RISK_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+@lru_cache(maxsize=2)
+def load_balanced_risk_bounds(model_key: str) -> tuple[float, float] | None:
+    score_file, score_col = SCORED_FILE_MAP.get(model_key, ("", ""))
+    if not score_file or not score_col:
+        return None
+
+    score_path = Path(score_file)
+    if not score_path.exists():
+        return None
+
+    try:
+        scores = pd.read_csv(score_path, usecols=[score_col])[score_col].dropna().astype(float)
+    except Exception:
+        return None
+
+    if scores.empty:
+        return None
+
+    low_max = float(scores.quantile(BALANCED_LOW_QUANTILE))
+    high_min = float(scores.quantile(BALANCED_HIGH_QUANTILE))
+    if not (0.0 <= low_max < high_min <= 1.0):
+        return None
+    return low_max, high_min
+
+
+def get_risk_bounds(model_key: str) -> tuple[float, float]:
+    cfg = load_risk_config()
+    entry = cfg.get(model_key, {}) if isinstance(cfg, dict) else {}
+    low_raw = entry.get("low_max", DEFAULT_RISK_BOUNDS["low_max"]) if isinstance(entry, dict) else DEFAULT_RISK_BOUNDS["low_max"]
+    high_raw = entry.get("high_min", DEFAULT_RISK_BOUNDS["high_min"]) if isinstance(entry, dict) else DEFAULT_RISK_BOUNDS["high_min"]
+
+    try:
+        low_max = float(low_raw)
+    except (TypeError, ValueError):
+        low_max = DEFAULT_RISK_BOUNDS["low_max"]
+    try:
+        high_min = float(high_raw)
+    except (TypeError, ValueError):
+        high_min = DEFAULT_RISK_BOUNDS["high_min"]
+
+    if not (0.0 <= low_max < high_min <= 1.0):
+        return float(DEFAULT_RISK_BOUNDS["low_max"]), float(DEFAULT_RISK_BOUNDS["high_min"])
+
+    # If configured high-risk coverage is too broad, rebalance using score quantiles.
+    high_share_raw = entry.get("high_bucket_share") if isinstance(entry, dict) else None
+    try:
+        high_share = float(high_share_raw)
+    except (TypeError, ValueError):
+        high_share = None
+
+    if high_share is not None and high_share > BALANCED_THRESHOLD_HIGH_SHARE:
+        balanced = load_balanced_risk_bounds(model_key)
+        if balanced is not None:
+            return balanced
+
+    return low_max, high_min
+
+
+def risk_label(score: float, model_key: str = "company") -> str:
+    low_max, high_min = get_risk_bounds(model_key)
+    if score >= high_min:
         return "High"
-    if score >= 0.40:
-        return "Medium"
-    return "Low"
+    if score <= low_max:
+        return "Low"
+    return "Medium"
 
 
 def suggest_industry_for_company(company_name: str, company_df: pd.DataFrame) -> tuple[str | None, str | None]:
@@ -375,7 +457,7 @@ def build_company_report_text(
         f"- Company: {company_name}",
         f"- Predicted risk score: {risk:.3f}",
         f"- Alert threshold: {threshold:.3f}",
-        f"- Risk level: {risk_label(risk)}",
+        f"- Risk level: {risk_label(risk, 'company')}",
         "",
         "Input Data",
     ]
@@ -410,7 +492,7 @@ def build_employee_report_text(
         f"- User: {username}",
         f"- Predicted risk score: {risk:.3f}",
         f"- Alert threshold: {threshold:.3f}",
-        f"- Risk level: {risk_label(risk)}",
+        f"- Risk level: {risk_label(risk, 'employee')}",
         "",
         "Input Data",
     ]
@@ -479,7 +561,20 @@ def inject_auth_context():
 
 @lru_cache(maxsize=1)
 def load_models():
-    return joblib.load("company_model.pkl"), joblib.load("employee_model.pkl")
+    company_path = Path("company_model.pkl")
+    employee_path = Path("employee_model.pkl")
+    if not company_path.exists() or not employee_path.exists():
+        missing = []
+        if not company_path.exists():
+            missing.append("company_model.pkl")
+        if not employee_path.exists():
+            missing.append("employee_model.pkl")
+        raise FileNotFoundError(
+            "Missing model file(s): "
+            + ", ".join(missing)
+            + ". Run `python fyp.py` to train/generate model artifacts."
+        )
+    return joblib.load(company_path), joblib.load(employee_path)
 
 
 @lru_cache(maxsize=1)
@@ -863,11 +958,13 @@ def company_predictor():
                 industry = suggested
 
             now = pd.Timestamp.now()
+            funds_non_negative = max(funds, 0.0)
             input_data = pd.DataFrame(
                 [
                     {
                         "Industry": industry,
                         "Funds_Raised": funds,
+                        "Funds_Raised_Log": float(np.log1p(funds_non_negative)),
                         "Stage": stage,
                         "Country": country,
                         "workforce_impacted %": workforce_impacted / 100.0,
@@ -879,7 +976,7 @@ def company_predictor():
                 ]
             )
 
-            threshold = 0.70
+            _, threshold = get_risk_bounds("company")
             risk = float(company_model.predict_proba(input_data)[0][1])
             causes = company_cause_breakdown(
                 funds=funds,
@@ -894,7 +991,7 @@ def company_predictor():
             result = {
                 "company_name": company_name,
                 "risk_score": round(risk, 3),
-                "risk_level": risk_label(risk),
+                "risk_level": risk_label(risk, "company"),
                 "causes": causes,
                 "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
             }
@@ -1020,7 +1117,10 @@ def employee_predictor():
             target_role = form_values["target_role"].strip()
             performance_score = int(form_values["performance_score"])
 
-            skill_count = 0 if not skills else len([t for t in skills.split(",") if t.strip()])
+            normalized_skill_tokens = sorted(_normalize_skills(skills))
+            model_skills = ",".join(normalized_skill_tokens) if normalized_skill_tokens else "none"
+            skill_count = len(normalized_skill_tokens)
+            experience_age_ratio = float(experience / age) if age > 0 else 0.0
             input_data = pd.DataFrame(
                 [
                     {
@@ -1032,14 +1132,15 @@ def employee_predictor():
                         "Gender": gender,
                         "EverBenched": ever_benched,
                         "ExperienceInCurrentDomain": experience,
-                        "Skills": skills,
+                        "Skills": model_skills,
                         "Performance_Score": performance_score,
                         "Skill_Count": skill_count,
+                        "Experience_Age_Ratio": experience_age_ratio,
                     }
                 ]
             )
 
-            threshold = 0.70
+            _, threshold = get_risk_bounds("employee")
             risk = float(employee_model.predict_proba(input_data)[0][1])
             selected_role = infer_role_from_skills(skills) if target_role == "Auto-detect" else target_role
             recommended_skills = recommend_skill_gaps(skills, selected_role)
@@ -1056,7 +1157,7 @@ def employee_predictor():
 
             result = {
                 "risk_score": round(risk, 3),
-                "risk_level": risk_label(risk),
+                "risk_level": risk_label(risk, "employee"),
                 "recommended_role": selected_role,
                 "recommended_skills": [skill.title() for skill in recommended_skills],
                 "causes": causes,

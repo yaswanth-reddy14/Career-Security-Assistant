@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import os
+import ssl
 import smtplib
 from datetime import datetime, timedelta
 from email.message import EmailMessage
@@ -23,6 +24,10 @@ except ImportError:
     certifi = None
 
 ALERT_LOG_PATH = Path("alerts_log.csv")
+
+
+def _smtp_setting(name: str) -> str:
+    return os.getenv(name, "").strip()
 
 
 def _empty_alert_df() -> pd.DataFrame:
@@ -88,14 +93,15 @@ def send_alert_email(
     SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, SMTP_SENDER
     """
     required = ["SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_SENDER"]
-    missing = [key for key in required if not os.getenv(key)]
+    settings = {key: _smtp_setting(key) for key in required}
+    missing = [key for key, value in settings.items() if not value]
 
     if missing:
         return False, f"Missing SMTP settings: {', '.join(missing)}"
 
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = os.environ["SMTP_SENDER"]
+    msg["From"] = settings["SMTP_SENDER"]
     msg["To"] = recipient
     msg.set_content(body)
 
@@ -113,11 +119,38 @@ def send_alert_email(
 
             msg.add_attachment(payload, maintype=maintype, subtype=subtype, filename=str(filename))
 
+    smtp_host = settings["SMTP_HOST"]
+    smtp_port = int(settings["SMTP_PORT"])
+    smtp_user = settings["SMTP_USERNAME"]
+    smtp_password = settings["SMTP_PASSWORD"]
+    is_gmail = "gmail.com" in smtp_host.lower()
+
+    if is_gmail:
+        # Gmail app passwords are commonly copied with spaces.
+        smtp_password = smtp_password.replace(" ", "")
+
     try:
-        with smtplib.SMTP(os.environ["SMTP_HOST"], int(os.environ["SMTP_PORT"])) as server:
-            server.starttls()
-            server.login(os.environ["SMTP_USERNAME"], os.environ["SMTP_PASSWORD"])
-            server.send_message(msg)
+        if smtp_port == 465:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context) as server:
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                server.ehlo()
+                server.starttls(context=ssl.create_default_context())
+                server.ehlo()
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+    except smtplib.SMTPAuthenticationError as exc:
+        if is_gmail:
+            return (
+                False,
+                "Email authentication failed for Gmail (535). Use a 16-character "
+                "Google App Password (not your regular Gmail password), enable "
+                "2-Step Verification, and keep SMTP_USERNAME/SMTP_SENDER as the full Gmail address.",
+            )
+        return False, f"SMTP authentication failed: {exc}"
     except Exception as exc:
         return False, f"Email sending failed: {exc}"
 

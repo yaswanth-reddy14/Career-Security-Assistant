@@ -442,6 +442,16 @@ tbody tr:hover {
     color: #991b1b;
 }
 
+.pill-amber {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.pill-green {
+    background: #dcfce7;
+    color: #166534;
+}
+
 .pill-gray {
     background: #e5edf6;
     color: #41556f;

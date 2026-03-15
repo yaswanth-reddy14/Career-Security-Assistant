@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 .env
+.vscode/
+alerts_log.csv
+*.log
+employee_model.pkl

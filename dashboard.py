@@ -4,6 +4,8 @@ load_dotenv(override=True)
 
 
 import difflib
+import json
+from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
@@ -23,13 +25,102 @@ st.set_page_config(page_title="Career Security Assistant", layout="wide")
 st.title("Career Security Assistant")
 st.caption("Secure Workforce Layoff Risk Prediction System")
 
+RISK_CONFIG_PATH = Path("risk_thresholds.json")
+DEFAULT_RISK_BOUNDS = {"low_max": 0.40, "high_min": 0.70}
+BALANCED_THRESHOLD_HIGH_SHARE = 0.45
+BALANCED_LOW_QUANTILE = 0.20
+BALANCED_HIGH_QUANTILE = 0.80
+SCORED_FILE_MAP: dict[str, tuple[str, str]] = {
+    "company": ("company_scored.csv", "Company_Risk_Score"),
+    "employee": ("employee_scored.csv", "Employee_Risk_Score"),
+}
 
-def risk_label(score: float) -> str:
-    if score >= 0.70:
+
+@st.cache_data
+def load_risk_config() -> dict[str, object]:
+    if not RISK_CONFIG_PATH.exists():
+        return {}
+    try:
+        raw = json.loads(RISK_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+@st.cache_data
+def load_balanced_risk_bounds(model_key: str) -> tuple[float, float] | None:
+    score_file, score_col = SCORED_FILE_MAP.get(model_key, ("", ""))
+    if not score_file or not score_col:
+        return None
+
+    score_path = Path(score_file)
+    if not score_path.exists():
+        return None
+
+    try:
+        scores = pd.read_csv(score_path, usecols=[score_col])[score_col].dropna().astype(float)
+    except Exception:
+        return None
+
+    if scores.empty:
+        return None
+
+    low_max = float(scores.quantile(BALANCED_LOW_QUANTILE))
+    high_min = float(scores.quantile(BALANCED_HIGH_QUANTILE))
+    if not (0.0 <= low_max < high_min <= 1.0):
+        return None
+    return low_max, high_min
+
+
+def get_risk_bounds(model_key: str) -> tuple[float, float]:
+    cfg = load_risk_config()
+    entry = cfg.get(model_key, {}) if isinstance(cfg, dict) else {}
+    low_raw = entry.get("low_max", DEFAULT_RISK_BOUNDS["low_max"]) if isinstance(entry, dict) else DEFAULT_RISK_BOUNDS["low_max"]
+    high_raw = entry.get("high_min", DEFAULT_RISK_BOUNDS["high_min"]) if isinstance(entry, dict) else DEFAULT_RISK_BOUNDS["high_min"]
+
+    try:
+        low_max = float(low_raw)
+    except (TypeError, ValueError):
+        low_max = DEFAULT_RISK_BOUNDS["low_max"]
+    try:
+        high_min = float(high_raw)
+    except (TypeError, ValueError):
+        high_min = DEFAULT_RISK_BOUNDS["high_min"]
+
+    if not (0.0 <= low_max < high_min <= 1.0):
+        return float(DEFAULT_RISK_BOUNDS["low_max"]), float(DEFAULT_RISK_BOUNDS["high_min"])
+
+    # If configured high-risk coverage is too broad, rebalance using score quantiles.
+    high_share_raw = entry.get("high_bucket_share") if isinstance(entry, dict) else None
+    try:
+        high_share = float(high_share_raw)
+    except (TypeError, ValueError):
+        high_share = None
+
+    if high_share is not None and high_share > BALANCED_THRESHOLD_HIGH_SHARE:
+        balanced = load_balanced_risk_bounds(model_key)
+        if balanced is not None:
+            return balanced
+
+    return low_max, high_min
+
+
+def risk_label(score: float, model_key: str = "company") -> str:
+    low_max, high_min = get_risk_bounds(model_key)
+    if score >= high_min:
         return "High"
-    if score >= 0.40:
-        return "Medium"
-    return "Low"
+    if score <= low_max:
+        return "Low"
+    return "Medium"
+
+
+def render_risk_level(level: str) -> None:
+    if level == "Low":
+        st.success("Risk Level: Low")
+    elif level == "Medium":
+        st.warning("Risk Level: Medium")
+    else:
+        st.error("Risk Level: High")
 
 
 def suggest_industry_for_company(company_name: str, company_df: pd.DataFrame) -> tuple[str | None, str | None]:
@@ -245,7 +336,7 @@ def build_company_report_text(
         f"- Company: {company_name}",
         f"- Predicted risk score: {risk:.3f}",
         f"- Alert threshold: {threshold:.3f}",
-        f"- Risk level: {risk_label(risk)}",
+        f"- Risk level: {risk_label(risk, 'company')}",
         "",
         "Input Data",
     ]
@@ -295,7 +386,7 @@ def build_employee_report_text(
         f"- User: {username}",
         f"- Predicted risk score: {risk:.3f}",
         f"- Alert threshold: {threshold:.3f}",
-        f"- Risk level: {risk_label(risk)}",
+        f"- Risk level: {risk_label(risk, 'employee')}",
         "",
         "Input Data",
     ]
@@ -463,7 +554,20 @@ def login_ui() -> None:
 
 @st.cache_resource
 def load_models():
-    return joblib.load("company_model.pkl"), joblib.load("employee_model.pkl")
+    company_path = Path("company_model.pkl")
+    employee_path = Path("employee_model.pkl")
+    if not company_path.exists() or not employee_path.exists():
+        missing = []
+        if not company_path.exists():
+            missing.append("company_model.pkl")
+        if not employee_path.exists():
+            missing.append("employee_model.pkl")
+        raise FileNotFoundError(
+            "Missing model file(s): "
+            + ", ".join(missing)
+            + ". Run `python fyp.py` to train/generate model artifacts."
+        )
+    return joblib.load(company_path), joblib.load(employee_path)
 
 
 @st.cache_data
@@ -526,6 +630,7 @@ def render_company_predictor(
             {
                 "Industry": industry,
                 "Funds_Raised": funds,
+                "Funds_Raised_Log": float(np.log1p(max(float(funds), 0.0))),
                 "Stage": stage,
                 "Country": country,
                 "workforce_impacted %": workforce_impacted / 100.0,
@@ -538,9 +643,10 @@ def render_company_predictor(
     )
 
     risk = float(company_model.predict_proba(input_data)[0][1])
+    risk_level = risk_label(risk, "company")
     st.write(f"Company: {company_name}")
     st.metric("Company Risk Score", f"{risk:.3f}")
-    st.info(f"Risk Level: {risk_label(risk)}")
+    render_risk_level(risk_level)
     st.progress(risk)
 
     company_causes = company_cause_breakdown(
@@ -674,7 +780,10 @@ def render_employee_predictor(
     if not (predict_employee or predict_employee_and_alert):
         return
 
-    skill_count = 0 if not skills.strip() else len([t for t in skills.split(",") if t.strip()])
+    normalized_skill_tokens = sorted(_normalize_skills(skills))
+    model_skills = ",".join(normalized_skill_tokens) if normalized_skill_tokens else "none"
+    skill_count = len(normalized_skill_tokens)
+    experience_age_ratio = float(int(exp) / int(age)) if int(age) > 0 else 0.0
     input_data = pd.DataFrame(
         [
             {
@@ -686,16 +795,18 @@ def render_employee_predictor(
                 "Gender": gender,
                 "EverBenched": ever_benched,
                 "ExperienceInCurrentDomain": int(exp),
-                "Skills": skills,
+                "Skills": model_skills,
                 "Performance_Score": int(perf),
                 "Skill_Count": int(skill_count),
+                "Experience_Age_Ratio": float(experience_age_ratio),
             }
         ]
     )
 
     risk = float(employee_model.predict_proba(input_data)[0][1])
+    risk_level = risk_label(risk, "employee")
     st.metric("Employee Risk Score", f"{risk:.3f}")
-    st.info(f"Risk Level: {risk_label(risk)}")
+    render_risk_level(risk_level)
     st.progress(risk)
 
     selected_role = infer_role_from_skills(skills) if target_role == "Auto-detect" else target_role
@@ -834,10 +945,12 @@ def render_analytics(company_model, employee_model, company_df: pd.DataFrame, em
     month_angle = 2 * np.pi * company_plot_df["Month"] / 12.0
     company_plot_df["Month_Sin"] = np.sin(month_angle)
     company_plot_df["Month_Cos"] = np.cos(month_angle)
+    company_plot_df["Funds_Raised_Log"] = np.log1p(company_plot_df["Funds_Raised"].clip(lower=0))
 
     company_features = [
         "Industry",
         "Funds_Raised",
+        "Funds_Raised_Log",
         "Stage",
         "Country",
         "workforce_impacted %",
@@ -867,8 +980,14 @@ def render_analytics(company_model, employee_model, company_df: pd.DataFrame, em
         emp_plot_df["Skills"]
         .fillna("")
         .astype(str)
-        .apply(lambda s: 0 if not s.strip() else len([t for t in s.split(",") if t.strip()]))
+        .apply(lambda s: sorted(_normalize_skills(s)))
     )
+    emp_plot_df["Skills"] = emp_plot_df["Skill_Count"].apply(lambda tokens: ",".join(tokens) if tokens else "none")
+    emp_plot_df["Skill_Count"] = emp_plot_df["Skill_Count"].apply(len)
+    emp_plot_df["Experience_Age_Ratio"] = (
+        emp_plot_df["ExperienceInCurrentDomain"].astype(float)
+        / emp_plot_df["Age"].replace(0, np.nan).astype(float)
+    ).fillna(0.0)
     emp_features = [
         "Education",
         "JoiningYear",
@@ -880,6 +999,7 @@ def render_analytics(company_model, employee_model, company_df: pd.DataFrame, em
         "ExperienceInCurrentDomain",
         "Performance_Score",
         "Skill_Count",
+        "Experience_Age_Ratio",
         "Skills",
     ]
     emp_plot_df["Predicted_Risk"] = employee_model.predict_proba(emp_plot_df[emp_features])[:, 1]
@@ -925,8 +1045,10 @@ company_model, employee_model = load_models()
 company_df, emp_df = load_data()
 
 st.sidebar.header("Alert Settings")
-company_alert_threshold = st.sidebar.slider("Company alert threshold", 0.0, 1.0, 0.70, 0.01)
-employee_alert_threshold = st.sidebar.slider("Employee alert threshold", 0.0, 1.0, 0.70, 0.01)
+_, company_default_high = get_risk_bounds("company")
+_, employee_default_high = get_risk_bounds("employee")
+company_alert_threshold = st.sidebar.slider("Company alert threshold", 0.0, 1.0, float(company_default_high), 0.01)
+employee_alert_threshold = st.sidebar.slider("Employee alert threshold", 0.0, 1.0, float(employee_default_high), 0.01)
 auto_alert = st.sidebar.checkbox("Auto-send alerts on high risk", value=True)
 cooldown_minutes = st.sidebar.slider("Alert cooldown (minutes)", min_value=5, max_value=240, value=60, step=5)
 

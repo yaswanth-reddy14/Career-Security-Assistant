@@ -1,0 +1,32 @@
+{
+  "generated_at_utc": "2026-03-14T07:06:50.066278+00:00",
+  "target_bucket_precision": 0.8,
+  "company": {
+    "selected_model": "xgboost",
+    "cv_roc_auc": 0.693616,
+    "low_max": 0.457548,
+    "high_min": 0.702107,
+    "target_precision": 0.8,
+    "min_bucket_share": 0.03,
+    "low_bucket_precision": 0.510638,
+    "low_bucket_recall": 0.138728,
+    "low_bucket_share": 0.085766,
+    "high_bucket_precision": 0.803333,
+    "high_bucket_recall": 0.642667,
+    "high_bucket_share": 0.547445
+  },
+  "employee": {
+    "selected_model": "random_forest",
+    "cv_roc_auc": 0.856175,
+    "low_max": 0.541565,
+    "high_min": 0.621565,
+    "target_precision": 0.8,
+    "min_bucket_share": 0.03,
+    "low_bucket_precision": 0.803499,
+    "low_bucket_recall": 0.977087,
+    "low_bucket_share": 0.798067,
+    "high_bucket_precision": 0.804428,
+    "high_bucket_recall": 0.68125,
+    "high_bucket_share": 0.291085
+  }
+}
